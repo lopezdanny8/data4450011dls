@@ -1,0 +1,29 @@
+# Datos pesados o de terceros que no se publican (ver README: cómo obtenerlos)
+data/ena/
+data/ena_papa.duckdb
+data/ena_papa.duckdb.wal
+data/mapas/*.zip
+data/clima/senamhi_*.xlsx
+*.sav
+
+# Archivos intermedios de R, Quarto y LaTeX
+.Rhistory
+.RData
+.Rproj.user/
+renv/library/
+renv/staging/
+paper/paper.tex
+paper/*_files/
+paper/*.knit.md
+paper/.quarto/
+*.aux
+*.log
+*.bbl
+*.blg
+*.out
+*.synctex.gz
+.quarto/
+
+# Documentos de trabajo personales
+desarrollo_del_articulo.docx
+~$*

@@ -1,0 +1,46 @@
+% Plantilla Pandoc/Quarto para el formato de conferencia IEEE (IEEEtran).
+% Quarto la usa con `template: plantilla_ieee.tex` en paper.qmd.
+\documentclass[conference,letterpaper]{IEEEtran}
+\usepackage{fontspec}
+\setmainfont{texgyretermes}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic]
+\usepackage[spanish,es-noshorthands,es-tabla,es-nodecimaldot]{babel}
+\usepackage{cite}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\usepackage[hidelinks]{hyperref}
+\graphicspath{{../figures/}}
+\renewcommand{\IEEEkeywordsname}{Palabras clave}
+\renewcommand{\IEEEbibitemsep}{0pt plus 0.5pt}
+% citas de Pandoc ([@clave] -> \citep) con el estilo numérico de IEEE
+\let\citep\cite
+\let\citet\cite
+% utilidades que Pandoc puede emitir
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\providecommand{\pandocbounded}[1]{#1}
+% porcentaje con espacio fino (5,9 %)
+\newcommand{\pc}{\,\%}
+% alias de \label para las tablas en LaTeX crudo (el filtro de Quarto elimina sus \label)
+\newcommand{\etiqueta}[1]{\label{#1}}
+% (sin $$header-includes$$: Quarto añadiría caption/float, que alteran el estilo IEEE)
+
+\begin{document}
+
+\title{$title$}
+
+\author{\IEEEauthorblockN{$autor.nombre$}
+\IEEEauthorblockA{\textit{$autor.facultad$} \\
+\textit{$autor.universidad$}\\
+$autor.ciudad$ \\
+$autor.correo$}}
+
+\maketitle
+
+$body$
+
+\bibliographystyle{IEEEtran}
+\bibliography{$for(bibliography)$$bibliography$$sep$,$endfor$}
+
+\end{document}

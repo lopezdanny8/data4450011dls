@@ -1,0 +1,56 @@
+% Flujo metodológico: etapas y variables que intervienen en cada una
+\begin{tikzpicture}[
+  font=\scriptsize, node distance=1.1mm and 3.4mm,
+  caja/.style={draw=black!45, rounded corners=1.2pt, align=left, inner sep=2.2pt, text width=#1, fill=black!3},
+  caja/.default=3.05cm,
+  etapa/.style={font=\scriptsize\bfseries, align=center, text width=3.1cm},
+  flecha/.style={-{Stealth[length=1.6mm]}, draw=black!55, line width=0.5pt}]
+
+% ---------------- 1. Fuentes
+\node[etapa] (t1) {1. Fuentes};
+\node[caja, below=1mm of t1] (ena) {\textbf{ENA 2015--2025} (INEI)\\ 3,8 M filas $\rightarrow$ 130\,098 registros de papa; prácticas; $w_i$};
+\node[caja, below=of ena] (pisco) {\textbf{PISCOp v2.1} (SENAMHI)\\ lluvia mensual, 0,1°; 2,8 M valores};
+\node[caja, below=of pisco] (terra) {\textbf{TerraClimate v1.1}\\ $T_{\min}$ y $T_{\max}$ mensual, 1/30°; 51,2 M valores};
+\node[caja, below=of terra] (mapa) {\textbf{Mapa distrital} (IGN)\\ 1\,873 distritos, centroides};
+
+% ---------------- 2. Procesamiento
+\node[etapa, right=of t1] (t2) {2. Procesamiento};
+\node[caja=3.3cm, below=1mm of t2] (rend) {\textbf{Rendimiento} $Y_{d,t}$ (t/ha): producción (P219) / superficie (P217), estimador de razón con $w_i$};
+\node[caja=3.3cm, below=of rend] (man) {\textbf{Manejo} (10, proporciones ponderadas): superficie media, riego, semilla certificada, papa nativa, abono, fertilizante, plaguicida, asistencia técnica, capacitación, asociatividad};
+\node[caja=3.3cm, below=of man] (cli) {\textbf{Clima por campaña} ago--jul (10): lluvia de campaña, siembra y crecimiento, anomalía, meses secos, $T_{\min}$, $T_{\max}$, amplitud, mínima más baja, meses con helada};
+
+% ---------------- 3. Base integrada
+\node[etapa, right=of t2] (t3) {3. Base integrada};
+\node[caja=2.75cm, below=1mm of t3, fill=blue!6, draw=blue!45] (base) {\textbf{Distrito-año} (sierra, $\geq$5 productores)\\[1pt] 4\,919 observaciones\\ 978 distritos\\ $Y_{d,t}$ + 20 predictores\\ + coordenadas $(x,y)$\\[1pt] DuckDB};
+
+% ---------------- 4. Modelos
+\node[etapa, right=of t3] (t4) {4. Modelos};
+\node[caja=2.75cm, below=1mm of t4] (ref) {\textbf{Referencia}: réplica RF y réplica GB \cite{tamayovera2025}};
+\node[caja=2.75cm, below=of ref] (aa) {\textbf{Aprendizaje automático}: XGBoost, RF espacial};
+\node[caja=2.75cm, below=of aa] (geo) {\textbf{Geoestadística}: kriging espacio-temporal (ET)};
+\node[caja=2.75cm, below=of geo] (hib) {\textbf{Híbrido}: RF + kriging ET};
+
+% ---------------- 5. Validación
+\node[etapa, right=of t4] (t5) {5. Validación};
+\node[caja=2.75cm, below=1mm of t5] (val) {\textbf{Temporal}: 5 pliegues pasado$\rightarrow$futuro\\[1pt] \textbf{Espacial}: 5 bloques de distritos\\[1pt] \textbf{Futuro}: 2015--2024 $\rightarrow$ 2025};
+\node[caja=2.75cm, below=of val, fill=blue!6, draw=blue!45] (met) {RMSE, MAE, $R^2$; Wilcoxon pareada};
+
+% ---------------- flechas
+\draw[flecha] (ena.east) -- (rend.west);
+\draw[flecha] (ena.east) -- (man.west);
+\draw[flecha] (pisco.east) -- (cli.west);
+\draw[flecha] (terra.east) -- (cli.west);
+\draw[flecha] (mapa.east) -- (cli.west);
+\draw[flecha] (rend.east) -- (base.west);
+\draw[flecha] (man.east) -- (base.west);
+\draw[flecha] (cli.east) -- (base.west);
+\draw[flecha] (base.east) -- (ref.west);
+\draw[flecha] (base.east) -- (aa.west);
+\draw[flecha] (base.east) -- (geo.west);
+\draw[flecha] (base.east) -- (hib.west);
+\draw[flecha] (ref.east) -- (val.west);
+\draw[flecha] (aa.east) -- (val.west);
+\draw[flecha] (geo.east) -- (val.west);
+\draw[flecha] (hib.east) -- (val.west);
+\draw[flecha] (val.south) -- (met.north);
+\end{tikzpicture}

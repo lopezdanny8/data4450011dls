@@ -1,0 +1,369 @@
+---
+title: "Predicción espacio-temporal del rendimiento de papa en los Andes peruanos: kriging espacio-temporal, Random Forest espacial y XGBoost con la ENA, PISCO y TerraClimate, 2015--2025"
+autor:
+  nombre: "Danny Christian Lopez Pajsi"
+  facultad: "Facultad de Ingeniería Estadística e Informática"
+  universidad: "Universidad Nacional del Altiplano"
+  ciudad: "Puno, Perú"
+  correo: "dannylopez@est.unap.edu.pe"
+lang: es
+bibliography: refs.bib
+cite-method: natbib
+number-sections: true
+format:
+  pdf:
+    template: plantilla_ieee.tex
+    output-file: paper_quarto.pdf
+    pdf-engine: xelatex
+    keep-tex: false
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: configuracion
+# Todas las cifras, tablas y figuras de este documento se calculan a partir de results/ y de la base DuckDB.
+# - Figuras: se regeneran con R/05_figuras.R (desactivar con REGENERAR_FIGURAS=0).
+# - Resultados de los modelos: R/04_modelos.R, R/07_prediccion_2025.R y R/09_validacion_robusta.R
+#   (ver README.md; R/ejecutar_todo.R corre la cadena completa).
+raiz <- local({
+  d <- normalizePath(getwd(), winslash = "/")
+  while (!file.exists(file.path(d, "R", "comun.R")) && dirname(d) != d) d <- dirname(d)
+  d
+})
+# se ejecuta antes de definir los formatos de abajo para que `n()` no oculte a dplyr::n()
+if (Sys.getenv("REGENERAR_FIGURAS", "1") == "1") sys.source(file.path(raiz, "R", "05_figuras.R"), envir = new.env())
+
+res <- function(f) read.csv(file.path(raiz, "results", f), colClasses = c(ubigeo = "character"), encoding = "UTF-8")
+
+# formato: coma decimal y espacio fino como separador de miles
+n   <- function(x, d = 2) formatC(x, format = "f", digits = d, decimal.mark = ",")
+nm  <- function(x, d = 2) gsub(",", "{,}", n(x, d))                      # dentro de $...$
+mil <- function(x) gsub(" ", "\\\\thinspace{}", formatC(x, format = "d", big.mark = " "))
+pv  <- function(p) if (p < 1e-3) sprintf("%d\\times10^{%d}", round(p / 10^floor(log10(p))), floor(log10(p))) else nm(p, 3)
+
+M   <- res("metricas_resumen_anidada.csv")
+S23 <- res("metricas_sequia_2023.csv")
+met <- function(e, m, v) M[M$esquema == e & M$modelo == m, v]
+B   <- res("bootstrap_ic.csv")
+bt  <- function(e, v) B[B$esquema == e & B$metrica == "mejora", v]
+MO  <- res("moran_residuos_2025.csv")
+mo  <- function(m, v) MO[MO$modelo == m, v]
+CO  <- res("cobertura_2025.csv")
+cqr <- CO[grepl("CQR", CO$intervalo), ]; qrf0 <- CO[!grepl("CQR", CO$intervalo), ]
+INV <- res("inventario_datos.csv")
+iv  <- function(fuente, etapa) INV$valor[INV$fuente == fuente & grepl(etapa, INV$etapa, fixed = TRUE)]
+por_anio <- as.numeric(sub(".*: ", "", strsplit(INV$detalle[grepl(">= 5", INV$etapa)], "; ")[[1]]))
+aux <- readRDS(file.path(raiz, "results", "modelos_aux.rds"))
+hp  <- aux$hiperparametros
+vg  <- aux$variogramas$futuro_F2025_rk_st$modelo$space
+pepita <- 100 * vg$psill[1] / sum(vg$psill); rango <- vg$range[2]
+P12 <- res("tabla_prediccion_12_distritos.csv")
+n_cal <- B$n[B$esquema == "temporal"][1]
+```
+
+\begin{abstract}
+La papa sostiene la seguridad alimentaria de los Andes peruanos, pero su rendimiento depende de un clima cada vez más variable y de prácticas de manejo desiguales. Este estudio integra tres fuentes oficiales en una sola base a nivel distrito-año: la Encuesta Nacional Agropecuaria (ENA) 2015--2025, la precipitación PISCOp v2.1 y las temperaturas de TerraClimate v1.1. Se procesaron `r n(iv("ENA", "todos los cap") / 1e6, 1)` millones de filas de la ENA, de las que se extrajeron `r mil(iv("ENA", "válidos"))` registros de papa, junto con `r n(iv("PISCOp v2.1", "válidos") / 1e6, 1)` millones de valores de lluvia y `r n(sum(INV$valor[grepl("TerraClimate", INV$fuente) & grepl("válidos", INV$etapa)]) / 1e6, 1)` millones de valores de temperatura; agregados por distrito y campaña, dieron `r mil(iv("Base de modelado", ">= 5"))` observaciones de `r iv("Base de modelado", "Distritos distintos")` distritos de la sierra con 20 predictores, con las que se compararon seis modelos de cuatro familias: una réplica del protocolo de Tamayo-Vera et al.\ (2025), con Random Forest y gradient boosting, como referencia; XGBoost con coordenadas y un Random Forest espacial con información de vecinos; kriging espacio-temporal con regresión; y un híbrido de Random Forest con kriging espacio-temporal de residuos. Se evaluaron con validación temporal, validación espacial por bloques y en la ronda 2025, no usada en ningún ajuste. El Random Forest espacial obtuvo el menor error en la validación temporal (RMSE de `r n(met("temporal", "rf_esp", "rmse"))`~t/ha; $R^2=`r nm(met("temporal", "rf_esp", "r2"))`$) y en 2025 (RMSE de `r n(met("futuro", "rf_esp", "rmse"))`~t/ha; $R^2=`r nm(met("futuro", "rf_esp", "r2"))`$), con reducciones de `r n(bt("temporal", "estimado"), 1)`\,\% (IC 95\,\%: `r n(bt("temporal", "ic_inf"), 1)`--`r n(bt("temporal", "ic_sup"), 1)`) y `r n(bt("futuro", "estimado"), 1)`\,\% (IC 95\,\%: `r n(bt("futuro", "ic_inf"), 1)`--`r n(bt("futuro", "ic_sup"), 1)`) frente a la réplica, con validación cruzada anidada. En distritos no observados ganó el híbrido con kriging (RMSE de `r n(met("espacial", "rf_rkst", "rmse"))`~t/ha; $R^2=`r nm(met("espacial", "rf_rkst", "r2"))`$), mientras que los modelos basados en vecinos perdieron precisión. Los intervalos bootstrap de la mejora excluyeron el cero en los tres esquemas. Con el modelo elegido se predijo 2025 con intervalos de predicción conformales al 95\,\%, cuya cobertura empírica fue del `r n(cqr$cobertura_pct, 1)`\,\%. Los predictores más importantes fueron la fertilización, el tipo de papa y la superficie. Los resultados muestran que el desempeño depende del esquema de validación y que la validación espacial es indispensable al predecir rendimientos agrícolas.
+\end{abstract}
+
+\begin{IEEEkeywords}
+rendimiento de papa, kriging espacio-temporal, Random Forest espacial, validación cruzada espacial, Encuesta Nacional Agropecuaria, PISCO
+\end{IEEEkeywords}
+
+# Introducción
+
+La papa es uno de los cultivos que más contribuye a la seguridad alimentaria mundial, en especial en países en desarrollo con altos niveles de pobreza y desnutrición [@devaux2020]. En la sierra del Perú la cultivan sobre todo pequeños productores de secano, cuya vulnerabilidad climática se agrava por estructuras sociopolíticas que no priorizan su protección [@highlands2021]. Los propios productores perciben que el clima ha cambiado y que su producción ha disminuido [@perception2025].
+
+Los estudios agronómicos confirman esa vulnerabilidad. En el Altiplano peruano, la reducción de la precipitación es el principal canal por el que el cambio climático afecta a la papa de secano [@aquacrop2024]. En los Andes centrales, la brecha de rendimiento de los pequeños productores promedia el 42\pc{} del rendimiento potencial, y el nitrógeno inorgánico es su principal factor explicativo [@yieldgap2020]. Esto ha impulsado la búsqueda de variedades nativas tolerantes a la sequía [@landraces2023] y a las heladas [@frost2024], y a escala nacional se ha examinado la influencia del clima regional en los rendimientos agrícolas [@peruyield2026]. Anticipar el rendimiento a nivel local es, por tanto, útil para focalizar asistencia, seguros y programas de adaptación.
+
+El aprendizaje automático se ha convertido en la herramienta dominante para predecir rendimientos. Las revisiones sistemáticas identifican a Random Forest y a los métodos de gradient boosting como los algoritmos más usados, casi siempre con variables climáticas entre los predictores [@vanklompenburg2020; @shawon2025; @obahoundje2025; @plants2025]. Random Forest superó a la regresión lineal en predicciones globales y regionales [@jeong2016], se ha combinado con simulación de cultivos a escala de condado [@sajid2022] y se ha usado para estimar el efecto de la escasez de insumos sobre la producción mundial [@inputs2023]; los extremos cálidos y secos simultáneos, por su parte, reducen los rendimientos de los principales cultivos a escala global [@extremes2023]. En la papa, Random Forest y XGBoost predijeron el rendimiento a partir de imágenes de drones en la sierra central del Perú ($R^2>0{,}74$) [@ccopi2024], Random Forest y gradient boosting lo hicieron en la sierra sur ($R^2=0{,}54$) [@uav2026sur], y estos modelos se han comparado con redes profundas [@potato2024ml]. A escala regional, Tamayo-Vera et al.\ [@tamayovera2025] compararon once modelos con 58 variables de clima, suelo y NDVI para la Isla del Príncipe Eduardo (Canadá) y reportaron un $R^2$ de 0,99 con Random Forest.
+
+Sin embargo, los datos de rendimiento tienen autocorrelación espacial: los distritos vecinos comparten clima, suelos y prácticas. Cuando la validación no respeta esa estructura, las métricas sobreestiman la capacidad de predecir en lugares no observados [@roberts2017; @ploton2020]. Meyer et al.\ mostraron que se requieren validación y selección de predictores espaciales [@meyer2019], delimitar el área de aplicabilidad de los modelos [@meyer2021] y evaluar con cuidado los mapas producidos con aprendizaje automático [@meyer2022]. Tamayo-Vera et al.\ [@tamayovera2025] validaron con una partición temporal, pero no evaluaron la predicción en unidades espaciales no vistas.
+
+La geoestadística ofrece una alternativa que modela la dependencia espacial de forma explícita y cuantifica la incertidumbre de cada predicción. El kriging espacio-temporal está implementado en el paquete `gstat` [@graler2016], y los enfoques híbridos combinan aprendizaje automático con kriging de residuos [@sensors2022] o incorporan la información espacial dentro del Random Forest, mediante coordenadas y distancias [@hengl2018] o mediante los valores observados en los vecinos más cercanos [@sekulic2020]. No se ha comparado estos enfoques con modelos de aprendizaje automático estándar para el rendimiento de cultivos andinos con datos de encuesta oficial.
+
+Este trabajo llena ese vacío con tres contribuciones: (i) una base integrada a nivel distrito-año que une la ENA 2015--2025 [@inei_ena] con la precipitación PISCOp [@aybar2020] y la temperatura TerraClimate [@abatzoglou2018]; (ii) una comparación de seis modelos, incluida una réplica del protocolo de ese artículo, bajo validación temporal, espacial y fuera del tiempo, con la ronda 2025 aún no usada en la literatura; y (iii) la evaluación del desempeño en el año de sequía de 2023 y un mapa de la incertidumbre de la predicción.
+
+\begin{figure*}[!t]
+\centering
+\input{fig_flujo.tex}
+\caption{Flujo metodológico del estudio y variables que intervienen en cada etapa.}
+\label{fig:flujo}
+\end{figure*}
+
+# Datos y métodos
+
+La Fig.\ \ref{fig:flujo} resume las cinco etapas del estudio y las variables que entran y salen de cada una.
+
+## Fuentes e integración
+
+La ENA es una encuesta anual por muestreo del Instituto Nacional de Estadística e Informática, con factores de expansión, que registra para cada productor los cultivos cosechados, la superficie, la producción y las prácticas de manejo [@inei_ena]. Se usaron las rondas 2015 a 2025: en 2020 la encuesta no se levantó y la ronda 2014 no contiene producción ni superficie en el archivo publicado. En 2015 y 2018 la superficie cosechada no se publicó en hectáreas; se reconstruyó con el factor hectárea/unidad declarada de la misma parcela, procedimiento que reprodujo el 100\pc{} de las hectáreas oficiales en 2016--2022.
+
+La precipitación mensual proviene de PISCOp v2.1 (SENAMHI) [@aybar2020; @senamhi_piscop] y las temperaturas, de TerraClimate v1.1 [@abatzoglou2018; @terraclimate_v11]. Cada variable se promedió dentro de los distritos del mapa oficial [@hdx_codab], ponderando por la fracción de celda incluida, y se agregó por campaña agrícola (agosto a julio). Las ventanas de crecimiento (noviembre--marzo) y de riesgo de helada (octubre--abril) siguen el calendario de la propia ENA: en la sierra, el 62\pc{} de la papa se siembra en octubre--noviembre y el 57\pc{} inicia su cosecha en abril--mayo.
+
+La Tabla\ \ref{tabla-fuentes} resume el volumen de datos procesado en cada fuente.
+
+```{r}
+#| label: tab-fuentes
+#| results: asis
+tmp <- sum(INV$valor[grepl("TerraClimate", INV$fuente) & grepl("válidos", INV$etapa)])
+cat(sprintf('
+\\begin{table}[!t]
+\\caption{Fuentes y volumen de datos procesados}
+\\etiqueta{tabla-fuentes}
+\\centering
+\\footnotesize
+\\setlength{\\tabcolsep}{2.4pt}
+\\begin{tabular}{lrl}
+\\toprule
+Fuente & Datos procesados & Aporte \\\\
+\\midrule
+ENA 2014--2025 (INEI) & %s filas$^{a}$ & rendimiento, 10 var. \\\\
+\\quad registros de papa válidos & %s & \\\\
+PISCOp v2.1 (lluvia) & %s valores & 5 var. \\\\
+TerraClimate v1.1 (Tmín, Tmáx) & %s valores & 5 var. \\\\
+Mapa distrital (IGN) & %s distritos & coordenadas \\\\
+\\midrule
+Base integrada (distrito-año) & %s $\\times$ %d & modelos \\\\
+\\bottomrule
+\\multicolumn{3}{l}{\\scriptsize $^{a}$ 2014--2024, más %s filas del módulo de cultivos 2025.} \\\\
+\\end{tabular}
+\\end{table}
+', mil(iv("ENA", "todos los cap")), mil(iv("ENA", "válidos")), mil(iv("PISCOp v2.1", "válidos")), mil(tmp),
+   mil(iv("Mapa distrital (IGN)", "Distritos")), mil(iv("Base de modelado", ">= 5")),
+   iv("Base de modelado", "Variables"), mil(iv("ENA", "cultivos ENA 2025"))))
+```
+
+## Variable objetivo y predictores
+
+El rendimiento de cada distrito $d$ y año $t$ se estimó con un estimador de razón ponderado:
+\begin{equation}
+Y_{d,t}=\frac{\sum_{i} w_i\,P_i}{\sum_{i} w_i\,S_i}\,,
+\end{equation}
+donde $P_i$ es la producción en toneladas, $S_i$ la superficie cosechada en hectáreas y $w_i$ el factor de expansión de cada registro de papa. De las `r mil(iv("ENA", "Registros de papa 2015"))` filas de papa se descartaron `r iv("ENA", "Registros de papa 2015") - iv("ENA", "válidos")` con rendimiento fuera de 0,1--60\ t/ha; las `r mil(iv("ENA", "válidos"))` restantes se agregaron en `r mil(iv("ENA", "todo el Perú"))` distrito-año, de los que `r mil(iv("Base de modelado", ">= 5"))` corresponden a `r iv("Base de modelado", "Distritos distintos")` distritos de la sierra con al menos cinco productores (`r min(por_anio)` a `r max(por_anio)` por año). La Tabla\ \ref{tabla-vars} describe la variable objetivo y los 20 predictores, diez de manejo y diez de clima, completos en todas las rondas salvo un valor de asociatividad, imputado con la mediana. Las variables de manejo son proporciones ponderadas con $w_i$ de los productores de papa del distrito (la de papa nativa, ponderada por superficie).
+
+```{r}
+#| label: tab-variables
+#| results: asis
+E <- res("estadisticos_variables.csv")
+V <- data.frame(rbind(
+  c("rendimiento_t_ha", "Rendimiento de papa $Y_{d,t}$", "ENA P219, P217", "t/ha", 2),
+  c("superficie_media_ha", "Superficie media de papa", "ENA P217", "ha", 2),
+  c("prop_riego", "Riego", "ENA P212", "0--1", 2),
+  c("prop_semilla_cert", "Semilla certificada", "ENA P214", "0--1", 2),
+  c("prop_papa_nativa", "Papa nativa o amarga", "ENA P204", "0--1", 2),
+  c("prop_abono", "Abono orgánico", "ENA P236", "0--1", 2),
+  c("prop_fertilizante", "Fertilizante", "ENA P238", "0--1", 2),
+  c("prop_plaguicida", "Plaguicida", "ENA P240", "0--1", 2),
+  c("prop_asistencia", "Asistencia técnica", "ENA P704", "0--1", 2),
+  c("prop_capacitacion", "Capacitación", "ENA P701", "0--1", 2),
+  c("prop_asociatividad", "Asociatividad", "ENA P801", "0--1", 2),
+  c("pp_campana", "Lluvia de la campaña", "PISCOp", "mm", 0),
+  c("pp_siembra", "Lluvia de siembra (set--nov)", "PISCOp", "mm", 0),
+  c("pp_crecimiento", "Lluvia de crecimiento (nov--mar)", "PISCOp", "mm", 0),
+  c("anom_pp_campana", "Anomalía de lluvia", "PISCOp", "\\%", 1),
+  c("meses_secos", "Meses secos (nov--mar)", "PISCOp", "meses", 2),
+  c("tmin_crecimiento", "$T_{\\min}$ de crecimiento", "TerraClimate", "°C", 2),
+  c("tmax_crecimiento", "$T_{\\max}$ de crecimiento", "TerraClimate", "°C", 2),
+  c("amplitud_termica", "Amplitud térmica", "TerraClimate", "°C", 2),
+  c("tmin_minima", "$T_{\\min}$ más baja (oct--abr)", "TerraClimate", "°C", 2),
+  c("meses_helada", "Meses con helada (oct--abr)", "TerraClimate", "meses", 2)))
+names(V) <- c("var", "etiqueta", "fuente", "unidad", "dig")
+orden <- V$var
+V <- merge(V, E, by.x = "var", by.y = "variable")
+stopifnot(nrow(V) == 21, sum(V$pct_completo < 100) <= 1)   # el texto menciona el único faltante (asociatividad)
+fila <- function(v) { r <- V[V$var == v, ]; d <- as.integer(r$dig)
+  sprintf("%s & %s & %s & %s (%s) \\\\", r$etiqueta, r$fuente, r$unidad, n(r$media, d), n(r$de, d)) }
+grupo <- function(t) sprintf("\\multicolumn{4}{l}{\\textit{%s}} \\\\", t)
+cat("\n\\begin{table}[!t]
+\\caption{Variables del modelo: fuente, unidad y media (desviación estándar) en la base de modelado ($n=",
+    mil(iv("Base de modelado", ">= 5")), "$ distrito-año)}
+\\etiqueta{tabla-vars}
+\\centering
+\\footnotesize
+\\setlength{\\tabcolsep}{3pt}
+\\begin{tabular}{llll}
+\\toprule
+Variable & Fuente & Unidad & Media (DE) \\\\
+\\midrule\n", sep = "")
+cat(grupo("Objetivo"), fila("rendimiento_t_ha"), "\\midrule", grupo("Manejo"), sapply(orden[2:11], fila),
+    "\\midrule", grupo("Clima (campaña agosto--julio)"), sapply(orden[12:21], fila), sep = "\n")
+cat("\\bottomrule\n\\end{tabular}\n\\end{table}\n\n")
+```
+
+## Modelos
+
+Los seis modelos se agrupan en cuatro familias según cómo tratan la dependencia espacio-temporal (Tabla\ \ref{tabla-modelos}). En todos, los predictores se transformaron con Yeo-Johnson y se estandarizaron (las coordenadas solo se estandarizaron), con parámetros estimados en el entrenamiento de cada pliegue. Las réplicas reproducen el protocolo de [@tamayovera2025], con Random Forest [@breiman2001] o gradient boosting [@chen2016] sobre las $K$ variables más correlacionadas con el rendimiento, y suponen observaciones independientes. XGBoost y el RF espacial aprenden la dependencia de forma implícita: el primero con las coordenadas $s$ del centroide y el segundo, siguiendo a [@sekulic2020], con el rendimiento $y_k$ y la distancia $d_k$ de los cinco distritos de entrenamiento más cercanos en el mismo año o, si no está en entrenamiento, en el anterior más próximo. El kriging ET y el híbrido modelan la covarianza de forma explícita: ajustan una tendencia (lineal o Random Forest) y predicen sus residuos ($\hat\varepsilon_i$, o $\hat r_i$ fuera de bolsa) por kriging ordinario con los 50 vecinos espacio-temporales más cercanos. Los pesos $\lambda_i$ provienen de un variograma separable, exponencial y con pepita, ajustado en cada pliegue,
+\begin{equation}
+\gamma(h,u)=\sigma^2\left[1-\rho_s(h)\,\rho_t(u)\right],
+\end{equation}
+donde $h$ es la distancia, $u$ el rezago en años y $\rho_s$, $\rho_t$ son las correlaciones espacial y temporal [@graler2016]. Solo estos dos modelos entregan la varianza de cada predicción.
+
+```{r}
+#| label: tab-modelos
+#| results: asis
+h <- function(m) { x <- hp[[m]]
+  et <- c(k = "K", mtry = "m", nodo = "n", n = "M", prof = "p")
+  paste(sprintf("$%s{=}%d$", et[names(x)], unlist(x)), collapse = ", ") }
+cat(sprintf('
+\\begin{table}[!t]
+\\caption{Modelos comparados: ecuación de predicción e hiperparámetros elegidos ($m$: variables por división; $n$: tamaño mínimo de nodo; $M$: árboles; $p$: profundidad)}
+\\etiqueta{tabla-modelos}
+\\centering
+\\footnotesize
+\\setlength{\\tabcolsep}{2.4pt}
+\\begin{tabular}{lll}
+\\toprule
+Modelo & Ecuación de predicción & Hiperparámetros \\\\
+\\midrule
+\\multicolumn{3}{l}{\\textit{Referencia, sin información espacial}} \\\\
+Réplica RF & $\\hat y=\\tfrac{1}{B}\\sum_{b}T_b(\\mathbf{x}_K)$ & %s \\\\
+Réplica GB & $\\hat y=\\sum_{m}\\eta f_m(\\mathbf{x}_K)$ & %s \\\\
+\\multicolumn{3}{l}{\\textit{Aprendizaje automático con información espacial}} \\\\
+XGBoost & $\\hat y=\\sum_{m}\\eta f_m(\\mathbf{x},s)$ & %s \\\\
+RF espacial & $\\hat y=\\tfrac{1}{B}\\sum_{b}T_b(\\mathbf{x},s,y_k,d_k)$ & %s \\\\
+\\multicolumn{3}{l}{\\textit{Geoestadística}} \\\\
+Kriging ET & $\\hat y=\\mathbf{x}^{\\top}\\hat{\\boldsymbol\\beta}+\\sum_{i}\\lambda_i\\hat\\varepsilon_i$ & por pliegue \\\\
+\\multicolumn{3}{l}{\\textit{Híbrido}} \\\\
+RF + kriging ET & $\\hat y=\\hat y_{RF}(\\mathbf{x})+\\sum_{i}\\lambda_i\\hat r_i$ & %s \\\\
+\\bottomrule
+\\end{tabular}
+\\end{table}
+', h("base_rf"), h("base_gb"), h("xgb"), h("rf_esp"), h("rf_rkst")))
+```
+
+El análisis se hizo en R con `tidyverse` [@wickham2019], `recipes` y `rsample` de `tidymodels` [@kuhn2022], `spatialsample` [@spatialsample2021], `ranger` [@wright2017], `xgboost`, `gstat` [@pebesma2004; @graler2016] y `performance` [@ludecke2021]. Este documento se generó con Quarto a partir de los scripts y resultados del repositorio <https://github.com/lopezdanny8/data4450011dls>.
+
+## Esquemas de validación
+
+Todos los modelos se evaluaron con las mismas particiones. (i) *Temporal*: cinco pliegues de pasado a futuro sobre 2015--2024, con años de prueba 2019, 2021, 2022, 2023 y 2024, como en [@tamayovera2025]. (ii) *Espacial*: cinco bloques de distritos vecinos formados con k-medias sobre sus coordenadas, de modo que ningún distrito de prueba aparece en entrenamiento [@roberts2017; @ploton2020]. (iii) *Futuro*: entrenamiento con 2015--2024 y prueba con 2025, ronda que no se usó en ningún ajuste. En cada pliegue temporal y espacial, los hiperparámetros se eligieron por búsqueda en grilla con una validación temporal interna que usa solo los datos de entrenamiento de ese pliegue (validación cruzada anidada); para 2025, con la validación temporal de 2015--2024 ($B=500$ árboles; $\eta=0{,}05$). Se reportan el RMSE, el MAE y el $R^2$. La mejora frente a la réplica RF se acompaña de su IC del 95\pc{} por bootstrap (2\thinspace{}000 remuestreos de distritos), y la diferencia de errores absolutos se contrastó con la prueba de Wilcoxon pareada. La autocorrelación de los residuos de 2025 se midió con el índice de Moran (cinco vecinos, 999 permutaciones).
+
+## Predicción con el mejor modelo e intervalos
+
+El mejor modelo se eligió por su RMSE en la validación temporal 2015--2024, sin usar 2025. Con él, entrenado en 2015--2024, se predijo cada distrito de 2025 con un intervalo de predicción al 95\pc{}. Se usó regresión cuantílica conformalizada [@romano2019]: un bosque de regresión cuantílica [@meinshausen2006], con los mismos predictores del RF espacial, estima los percentiles 2,5 y 97,5, y una corrección conformal [@lei2018; @angelopoulos2023] los amplía hasta garantizar la cobertura. La corrección es el cuantil $\lceil (n+1)(1-\alpha) \rceil / n$ de los puntajes $E_i=\max(\hat q_{\mathrm{inf}}-y_i,\; y_i-\hat q_{\mathrm{sup}})$, calculados en los pliegues temporales ($n=`r sub(" ", "\\\\,", formatC(n_cal, format = "d", big.mark = " "))`$; $\alpha=0{,}05$).
+
+# Resultados
+
+## Patrón espacial y estructura de dependencia
+
+Por departamento (Fig.\ \ref{fig:area}a), Arequipa, Junín y Pasco tienen los rendimientos más altos (13,6--18,8\ t/ha en promedio) y Lambayeque, Puno e Ica los más bajos (4,5--6,1\ t/ha). La campaña 2023 fue la más seca del periodo: la anomalía de lluvia fue negativa en casi toda la sierra (Fig.\ \ref{fig:area}b) y alcanzó $-45$\pc{} en Juliaca; ese año Puno registró su menor rendimiento, 3,6\ t/ha, frente a 4,9--7,7\ t/ha en las demás rondas. El variograma de los residuos (Fig.\ \ref{fig:vario}) mostró una pepita espacial del `r round(pepita)`\pc{} y un rango exponencial de `r round(rango)`\ km (rango práctico cercano a `r 10 * round(3 * rango / 10)`\ km). Los rezagos de uno a cuatro años casi se superponen y el rango temporal alcanzó el límite superior del ajuste, lo que indica una componente persistente de cada distrito.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig1_area_estudio.pdf}
+\caption{Papa de la sierra por departamento: (a) rendimiento medio 2015--2025 (estimador de razón con el factor de expansión); (b) anomalía de la lluvia de la campaña 2023, promedio de los distritos estudiados. En gris, departamentos sin papa de sierra.}
+\label{fig:area}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig2_variograma.pdf}
+\caption{Variograma espacio-temporal empírico (puntos) y ajustado (líneas) de los residuos de la tendencia lineal, 2015--2024.}
+\label{fig:vario}
+\end{figure}
+
+## Comparación de modelos
+
+La Tabla\ \ref{tabla-res} resume el desempeño. En la validación temporal, el RF espacial obtuvo el menor error (RMSE de `r n(met("temporal", "rf_esp", "rmse"))`\ t/ha; $R^2=`r nm(met("temporal", "rf_esp", "r2"))`$), `r n(bt("temporal", "estimado"), 1)`\pc{} menos que la réplica RF (IC 95\pc{}: `r n(bt("temporal", "ic_inf"), 1)`--`r n(bt("temporal", "ic_sup"), 1)`; $p=`r pv(bt("temporal", "p_wilcoxon"))`$), y XGBoost quedó muy cerca. En la predicción de 2025 el orden se mantuvo: el RF espacial redujo el RMSE en `r n(bt("futuro", "estimado"), 1)`\pc{} (IC 95\pc{}: `r n(bt("futuro", "ic_inf"), 1)`--`r n(bt("futuro", "ic_sup"), 1)`; $R^2=`r nm(met("futuro", "rf_esp", "r2"))`$ frente a `r n(met("futuro", "base_rf", "r2"))`; $p=`r pv(bt("futuro", "p_wilcoxon"))`$). Sus residuos de 2025 mostraron poca autocorrelación espacial (I de Moran $=`r nm(mo("rf_esp", "moran_I"))`$; $p=`r nm(mo("rf_esp", "p_valor"), 3)`$), un tercio de la de la réplica RF ($`r nm(mo("base_rf", "moran_I"))`$; $p=`r nm(mo("base_rf", "p_valor"), 3)`$). En el año de sequía de 2023, su $R^2$ fue de `r n(S23$r2_2023[S23$modelo == "rf_esp"])` frente a `r n(S23$r2_2023[S23$modelo == "base_rf"])` de la réplica.
+
+La validación espacial cambió el orden y fue el escenario más difícil para todos los modelos. El híbrido RF + kriging ET obtuvo el menor error (RMSE de `r n(met("espacial", "rf_rkst", "rmse"))`\ t/ha; $R^2=`r nm(met("espacial", "rf_rkst", "r2"))`$), `r n(bt("espacial", "estimado"), 1)`\pc{} menos que la réplica (IC 95\pc{}: `r n(bt("espacial", "ic_inf"), 1)`--`r n(bt("espacial", "ic_sup"), 1)`), seguido del kriging ET, aunque la diferencia en el error absoluto típico no fue significativa (Wilcoxon $p=`r pv(bt("espacial", "p_wilcoxon"))`$): la mejora proviene sobre todo de menos errores grandes. En cambio, el RF espacial y XGBoost con coordenadas tuvieron el peor desempeño ($R^2$ de `r n(met("espacial", "rf_esp", "r2"))` y `r n(met("espacial", "xgb", "r2"))`), por debajo de la réplica, que no usa información espacial.
+
+```{r}
+#| label: tab-resultados
+#| results: asis
+mods <- c(base_rf = "Réplica RF \\cite{tamayovera2025}", base_gb = "Réplica GB \\cite{tamayovera2025}", xgb = "XGBoost",
+          rf_esp = "RF espacial", rk_st = "Kriging ET", rf_rkst = "RF + kriging ET")
+cols <- list(c("temporal", "rmse"), c("temporal", "r2"), c("espacial", "rmse"), c("espacial", "r2"),
+             c("futuro", "rmse"), c("futuro", "r2"))
+X <- sapply(cols, function(cc) sapply(names(mods), function(m) met(cc[1], m, cc[2])))
+X <- cbind(X, S23$r2_2023[match(names(mods), S23$modelo)])
+mejor <- sapply(seq_len(ncol(X)), function(j) if (j %in% c(1, 3, 5)) which.min(X[, j]) else which.max(X[, j]))
+celdas <- sapply(seq_len(ncol(X)), function(j) { v <- n(X[, j]); v[mejor[j]] <- sprintf("\\textbf{%s}", v[mejor[j]]); v })
+cat('
+\\begin{table}[!t]
+\\caption{Desempeño por esquema de validación con validación cruzada anidada (media de pliegues; RMSE en t/ha). En negrita, el mejor de cada columna.}
+\\etiqueta{tabla-res}
+\\centering
+\\setlength{\\tabcolsep}{3.2pt}
+\\begin{tabular}{lccccccc}
+\\toprule
+ & \\multicolumn{2}{c}{Temporal} & \\multicolumn{2}{c}{Espacial} & \\multicolumn{2}{c}{Futuro 2025} & 2023 \\\\
+\\cmidrule(lr){2-3}\\cmidrule(lr){4-5}\\cmidrule(lr){6-7}\\cmidrule(lr){8-8}
+Modelo & RMSE & $R^2$ & RMSE & $R^2$ & RMSE & $R^2$ & $R^2$ \\\\
+\\midrule
+', paste(mods, apply(celdas, 1, paste, collapse = " & "), sep = " & ", collapse = " \\\\\n"), ' \\\\
+\\bottomrule
+\\end{tabular}
+\\end{table}
+
+', sep = "")
+```
+
+## Predicción de 2025 con el mejor modelo
+
+El RF espacial fue el mejor modelo en la validación temporal y se usó para predecir 2025. La Tabla\ \ref{tabla-pred} muestra la predicción puntual y el intervalo al 95\pc{} de doce distritos: los seis con más productores de papa fuera de Puno y los seis con más productores de Puno. En `r if (all(P12$dentro)) "los doce" else sum(P12$dentro)`, el rendimiento observado cayó dentro del intervalo. En los `r cqr$n` distritos, la cobertura empírica fue del `r n(cqr$cobertura_pct, 1)`\pc{} (nominal 95\pc{}), frente al `r n(qrf0$cobertura_pct, 1)`\pc{} del bosque cuantílico sin conformalizar. Los intervalos son anchos (mediana de `r n(cqr$ancho_mediano, 1)`\ t/ha), lo que refleja la variabilidad real del rendimiento distrital estimado con pocos productores.
+
+```{r}
+#| label: tab-prediccion
+#| results: asis
+titulo <- function(x) {
+  x <- tools::toTitleCase(tolower(x))
+  arreglo <- c(Huanuco = "Huánuco", Junin = "Junín", Acora = "Ácora", "Los Morochucos" = "Los Morochucos")
+  ifelse(x %in% names(arreglo), arreglo[x], x)
+}
+filas <- sprintf("%s & %s & %d & %s & %s & [%s; %s] \\\\", titulo(P12$departamento), titulo(P12$distrito),
+                 P12$n_productores, n(P12$obs), n(P12$pred), n(P12$li), n(P12$ls))
+cat('
+\\begin{table}[!t]
+\\caption{Predicción de 2025 con el RF espacial (t/ha): rendimiento observado, predicción puntual e intervalo de predicción conformal al 95\\,\\%; $n$: productores de papa encuestados en 2025}
+\\etiqueta{tabla-pred}
+\\centering
+\\footnotesize
+\\setlength{\\tabcolsep}{2.4pt}
+\\begin{tabular}{llrrrc}
+\\toprule
+Departamento & Distrito & $n$ & Observado & Predicho & IP 95\\,\\% \\\\
+\\midrule
+', paste(filas[1:6], collapse = "\n"), '
+\\midrule
+', paste(filas[7:12], collapse = "\n"), '
+\\bottomrule
+\\end{tabular}
+\\end{table}
+
+', sep = "")
+```
+
+## Mapas e importancia de las variables
+
+Resumido por departamento (Fig.\ \ref{fig:mapas}), el RF espacial reprodujo el patrón observado en 2025, con los mayores rendimientos en Junín y Pasco y los menores en Piura y Puno, aunque subestimó a los departamentos más productivos (Junín: 15,6\ t/ha observado frente a 13,8 predicho; Pasco: 14,4 frente a 12,2). Los intervalos de predicción fueron más anchos en Arequipa y Tacna (19,5 y 17,6\ t/ha) y más estrechos en Puno (9,3\ t/ha). En la importancia por permutación (Fig.\ \ref{fig:imp}), los predictores más influyentes fueron la proporción de productores que fertilizan, la de papa nativa o amarga y la superficie media, seguidos de cinco variables climáticas: la lluvia de la campaña, la temperatura mínima más baja, la lluvia de crecimiento, la temperatura mínima de crecimiento y la lluvia de siembra.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig4_mapas_2025.pdf}
+\caption{Predicción de 2025 (ronda no usada en el ajuste) por departamento, promedio de los distritos ponderado por productores: (a) rendimiento observado; (b) predicho por el RF espacial entrenado con 2015--2024; (c) ancho medio del intervalo de predicción conformal al 95\,\%. Departamentos como en la Fig.~\ref{fig:area}.}
+\label{fig:mapas}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig5_importancia.pdf}
+\caption{Importancia por permutación de los predictores en un Random Forest entrenado con 2015--2024.}
+\label{fig:imp}
+\end{figure}
+
+# Discusión
+
+Los $R^2$ obtenidos (`r n(met("espacial", "rf_rkst", "r2"))` a `r n(met("futuro", "rf_esp", "r2"))` según el esquema) están muy por debajo del 0,99 de Tamayo-Vera et al.\ [@tamayovera2025]. En parte, la diferencia refleja los datos: rendimientos de una encuesta de pequeños productores, con pocos informantes por distrito y gran heterogeneidad de variedades y prácticas, frente a registros de una agricultura comercial homogénea. También refleja la validación: al replicar su protocolo con nuestros datos, la réplica RF alcanzó un $R^2$ de `r n(met("temporal", "base_rf", "r2"))` en la validación temporal y de `r n(met("espacial", "base_rf", "r2"))` en la espacial. Esta caída es moderada frente a la de Ploton et al.\ [@ploton2020], cuyo modelo pasó de explicar más de la mitad de la variación con validación no espacial a un poder predictivo casi nulo con validación espacial, y coincide con las advertencias de Roberts et al.\ [@roberts2017] y de Meyer y Pebesma [@meyer2022]. Nuestro error en 2025 (RMSE de `r n(met("futuro", "rf_esp", "rmse"))`\ t/ha) es comparable al de Random Forest con imágenes de drones en la sierra sur (RMSE de 2,72\ t/ha; $R^2=0{,}54$) [@uav2026sur], aunque aquí se predice a escala distrital y solo con datos de encuesta y clima.
+
+El hallazgo central es que no hay un modelo superior en todos los esquemas. Cuando el objetivo es pronosticar distritos ya observados, los vecinos aportan información valiosa y el RF espacial, en la línea de [@sekulic2020; @hengl2018], fue el mejor. Cuando la zona de predicción carece de observaciones, esa información deja de existir y los modelos que dependen de ella o de las coordenadas extrapolan mal; allí el kriging de residuos, que modela la covarianza de forma explícita, fue más robusto. Esto concuerda con la recomendación de evaluar los modelos según la distancia a la que realmente se va a predecir [@linnenbrink2024] y de delimitar su área de aplicabilidad [@meyer2021]. Para un uso operativo, el modelo debe elegirse según el escenario: el RF espacial para pronosticar la próxima campaña en distritos encuestados, y el híbrido con kriging para estimar distritos sin muestra.
+
+La importancia de la fertilización coincide con el hallazgo de que el nitrógeno inorgánico es el principal factor de la brecha de rendimiento de la papa en los Andes centrales [@yieldgap2020] y con que, a escala global, la falta de fertilizantes es el choque de insumos que causa las mayores pérdidas, de hasta 26\pc{} en la producción de maíz [@inputs2023]. Así se responde a la limitación que señalan Tamayo-Vera et al.\ sobre la ausencia de variables de manejo [@tamayovera2025]. El peso de la lluvia de la campaña y de la temperatura mínima concuerda con los impactos de la menor precipitación en el Altiplano [@aquacrop2024], con la relevancia de la tolerancia a la sequía [@landraces2023] y a las heladas [@frost2024], y con el efecto negativo de los extremos cálidos y secos sobre los rendimientos [@extremes2023; @plants2025]. La sequía de 2023 se tradujo en una caída abrupta del rendimiento en Puno, y el RF espacial mantuvo en ese año su ventaja sobre la réplica.
+
+El estudio tiene limitaciones. Las temperaturas mensuales diluyen las heladas de pocas noches, lo que explica la baja importancia de los meses con helada; productos diarios como PISCOt [@pisco_t2023] permitirían índices más finos cuando cubran todo el periodo. El rendimiento distrital proviene de pocos productores en muchos distritos, lo que añade error de muestreo. Los residuos conservan una autocorrelación espacial débil pero significativa, que un modelo con efectos aleatorios espaciales podría absorber. Por último, el análisis es distrital y sus conclusiones no deben trasladarse al productor individual.
+
+# Conclusiones
+
+Se construyó una base integrada de la ENA 2015--2025 con información climática de PISCOp y TerraClimate para predecir el rendimiento de papa en `r iv("Base de modelado", "Distritos distintos")` distritos de la sierra peruana, y se compararon seis modelos de cuatro familias bajo validación temporal, espacial y fuera del tiempo. Los modelos con información espacial superaron a la réplica del protocolo de Tamayo-Vera et al.\ en los tres esquemas, con validación cruzada anidada e intervalos bootstrap de la mejora que excluyen el cero: el RF espacial redujo el RMSE en `r n(bt("temporal", "estimado"), 1)`\pc{} en la validación temporal y en `r n(bt("futuro", "estimado"), 1)`\pc{} en 2025, y el híbrido con kriging espacio-temporal lo redujo en `r n(bt("espacial", "estimado"), 1)`\pc{} en distritos no observados. Con el RF espacial se predijo 2025 con intervalos de predicción conformales cuya cobertura empírica fue del `r n(cqr$cobertura_pct, 1)`\pc{}. El desempeño depende del esquema de validación, por lo que los estudios de predicción de rendimientos deberían reportar siempre una validación espacial. Como trabajo futuro se propone incorporar índices climáticos diarios, ponderar por el error de muestreo de cada distrito y extender el análisis a otros cultivos andinos.
